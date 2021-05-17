@@ -1,0 +1,558 @@
+---
+title: "Second Data Product"
+output: html_notebook
+---
+
+The second data product for my university course.
+It's aim is to predict housing prices using regression.  
+The used data is the Ames Housing dataset, from kaggle.com
+It's split into two files, a train.csv and a test.csv.  
+Created by: Dobosi Péter MW79ON
+
+
+
+## Business Understanding:
+
+First let's decide what the problem exactly is, and what do we want to achieve.
+The exact overview of the problem can be read here: 
+https://www.kaggle.com/c/house-prices-advanced-regression-techniques/overview
+
+In summary, we have to create a model, which can predict the sale price of a
+house, given it's parameters, using regression.
+
+My plan is the following:
+
+1. Explore the data.
+2. Clean and transform it into a usable format.
+3. Choose, build and verify a model.
+4. Evaluate it.
+5. Use it to predict on the final dataset.
+
+
+First things first, let's load the data and take a quick look at it:
+```{r}
+data <- read.csv("./train.csv")
+data
+```
+
+We have more than 1400 objects and 79 parameters. We have NAs and everything
+is simply either characters or integers.  
+To properly prepare the data we have to 
+handle the empty values one way or another, and also convert the characters to
+factors.
+
+It seems like we have a couple of parameters that are mostly NAs:
+```{r}
+alley_na_percentage <- sum(is.na(data$Alley))/1460*100
+pool_na_percentage <- sum(is.na(data$PoolQC))/1460*100
+fence_na_percentage <- sum(is.na(data$Fence))/1460*100
+feature_na_percentage <- sum(is.na(data$MiscFeature))/1460*100
+
+paste("Percentage of NAs in the field Alley:", alley_na_percentage, "%")
+paste("Percentage of NAs in the field PoolQC:", pool_na_percentage, "%")
+paste("Percentage of NAs in the field Fence:", fence_na_percentage, "%")
+paste("Percentage of NAs in the field MiscFeature:", feature_na_percentage, "%")
+```
+
+With the help of data_description.txt we can decipher what do these mean:  
+(Only the relevant parts here, read the rest from the file if you are interested.)
+
+Alley:  
+Type of alley access to property.
+
+       Grvl	Gravel
+       Pave	Paved
+       NA 	No alley access
+
+PoolQC:  
+Pool quality.
+
+       Ex	Excellent
+       Gd	Good
+       TA	Average/Typical
+       Fa	Fair
+       NA	No Pool
+
+Fence:  
+Fence quality.
+		
+       GdPrv	Good Privacy
+       MnPrv	Minimum Privacy
+       GdWo	Good Wood
+       MnWw	Minimum Wood/Wire
+       NA	No Fence
+
+MiscFeature:  
+Miscellaneous feature not covered in other categories.
+		
+       Elev	Elevator
+       Gar2	2nd Garage (if not described in garage section)
+       Othr	Other
+       Shed	Shed (over 100 SF)
+       TenC	Tennis Court
+       NA	None
+
+
+As we can see, they don't mean that we have no information on those parameters
+of the buildings. Rather their meaning is simply that they lack the things
+described by those parameters. This is important information, we can't just drop, or guess them from based on the others.
+
+
+
+## Exploratory Data Analysis:
+
+Let's find out more about the data's characteristics!  
+Let's take a quick look at the parameters of the dataset:
+```{r}
+names(data)
+```
+As we can see, we have roughly 80 parameters.  
+Let's take a look at the types of the parameters:
+```{r}
+str(data)
+```
+All of our parameters are either character or integer vectors.  
+Let's take a look at the summary:
+```{r}
+summary(data)
+```
+A lot of our attributes are character vectors, which we can't summarize this way.
+
+
+## One dimensional examination
+
+In which we find out more about given parameters of the data.  
+Let's take a visual look:
+```{r}
+plot(data$LotArea)
+plot(data$LotArea, ylim = c(1000, 20000))
+```
+
+We can see, that in terms of Area, most of the properties are between 1000 and
+20000 square feet, with a few outliers.  
+Let's check out how many houses were built in each year:
+
+```{r}
+hist(data$YearBuilt)
+```
+
+We can also see, a tendency towards newly built homes.
+
+```{r}
+plot(table(data$Fireplaces))
+grid()
+```
+Multidimensional examination:
+
+Now let's take a look at multiple parameters at the same time:
+```{r}
+library(car)
+scatterplot(data$YearBuilt, data$SalePrice, regLine = list(col="green"), smooth=list(col.smooth="red", col.spread="black"))
+```
+
+We might see some kind of exponential pattern, given the higher prices of newly built homes.
+
+```{r}
+scatterplot(data$LotArea, data$SalePrice, xlim = c(1000, 20000), regLine = list(col="green"), smooth=list(col.smooth="red", col.spread="black"))
+```
+
+We can't see any clear correlation between the area and the price of a property.
+
+
+Just out of curiosity, I tried to draw the feature plot of the data.
+To my surprise, with a couple of tweaks, and given some time it actually worked:
+```{r}
+
+# This took a couple minutes, but it worked. It's about 64k square meters.
+# The plot is basically unreadable, but it shows that there is correlation
+# between a couple of the parameters.
+
+# pdf(file = "/home/peter/test.pdf",
+#     width = 10000,
+#     height = 10000)
+
+# plot(data)
+
+# dev.off()
+```
+
+Although we couldn't really learn anything from it, due to it's size it's 
+unreadable.
+
+
+Let's check out the covariance matrix:
+```{r}
+# cov(data)
+```
+
+This doesn't work because there are non numeric or logical values in our
+dataframe still. It's time we cleaned up the data a bit. But before we do that,
+let's try to take a look at the correlations between a couple other parameters.
+
+```{r}
+library(corrplot)
+cors <- cor(data[,c(5,19,20,39,47,63,72,77,81)], use = "complete.obs")
+corrplot(cors, type = "lower")
+```
+
+We can see correlation between the price and a couple of parameters, such as the
+size of the living area.
+
+
+
+
+## Data Cleaning:
+
+There is a lot to do. We have NAs, and non numeric values everywhere.
+Let's start by dealing with the NAs first.  
+We need to find out which columns contain any NAs:
+```{r}
+na_cols <- names(which(colSums(is.na(data)) > 0))
+na_cols
+```
+We have 19 columns containing NAs, let's find out more about them.  
+Let's find out how many NAs do these columns have:
+```{r}
+get_na_count <- function(column_name) {
+    sum(is.na(data[column_name]))
+}
+
+na_counts <- data.frame(sapply(na_cols, get_na_count))
+
+library(data.table)
+na_stats <- transpose(na_counts)
+
+colnames(na_stats) <- na_cols
+rownames(na_stats) <- c("NA count")
+
+calc_na_percentage <- function(column_name) {
+    get_na_count(column_name = column_name)/nrow(data) * 100
+}
+
+na_stats[nrow(na_stats) + 1,] = sapply(na_cols, calc_na_percentage)
+rownames(na_stats) <- c("NA count", "NA percentage")
+
+na_stats
+```
+
+As we can see, we have some parameters that are mostly NAs, while others only 
+contain a few of them.  
+Let's deal with them appropriately, now that we know more about them.  
+First, the LotFrontage parameter:
+```{r}
+unique(data$LotFrontage)
+```
+
+
+The description doesn't say anything about NAs in this parameter, but as we can
+see, there aren't any zeros here. So I'll assume that NAs mean zero here as well,
+as it does in most of the other parameters.  
+Let's fill them in now:
+```{r}
+data[is.na(data$LotFrontage),]$LotFrontage <- 0
+```
+
+
+The Alley parameter:  
+The data_description.txt says that NAs in this parameter mean, that there is no
+alley access, to the given property.
+```{r}
+unique(data$Alley)
+```
+
+Later I'll probably convert all character
+vectors to factors, so let's leave this as is.  
+Now for the Masonry veneer type:
+```{r}
+ms_types <- unique(data$MasVnrType)
+ms_types
+```
+
+We have a handful of NAs, but here they do not simply mean that there is no such
+thing as what's being described by the parameter. We have to actually fill them
+in.  
+Let's do so by the most frequent value:
+
+```{r}
+get_ms_count <- function(unique_value){
+    sum(data$MasVnrType == unique_value, na.rm = T)
+}
+
+sapply(ms_types, get_ms_count)
+```
+
+As we can see, the most common option is None, so let's assume that NAs are None:
+```{r}
+data[is.na(data$MasVnrType),]$MasVnrType <- "None"
+```
+
+We have to do the same for Masonry veneer area as well, but with 0s this time:
+```{r}
+data[is.na(data$MasVnrArea),]$MasVnrArea <- 0
+```
+
+BsmtQual is next: 
+```{r}
+unique(data$BsmtQual)
+```
+
+According to the description, NAs here mean, that the property has no basement.
+Let's leave this as is.  
+The same is true for BsmtCond, BsmtExposure, BsmtFinSF1, BsmtFinType1 and BsmtFinType2.  
+Electrical is up next:
+```{r}
+elec_types <- unique(data$Electrical)
+elec_types
+```
+
+The description doesn't say anything about the one missing value, so let's fill
+it with the most frequent value:
+```{r}
+
+# TODO I need to change these to reusable methods.
+
+get_elec_count <- function(unique_value){
+    sum(data$Electrical == unique_value, na.rm = T)
+}
+
+sapply(elec_types, get_elec_count)
+```
+
+As we can see, the Standard Breaker is the most common, let's assume the missing
+value is that:
+```{r}
+data[is.na(data$Electrical),]$Electrical <- "SBrkr"
+```
+
+FireplaceQu is next:  
+The description says that NAs here mean that there is no fireplace, so let's 
+leave this as is.  
+The same deal for all the parameters describing the garages.  
+PoolQC and Fence also behave the exact same way.  
+Finally the last one, MiscFeature. This one is similar, NAs simply mean that
+there aren't any misc features.  
+
+Finally after all this hard work, we shouldn't have any NAs left in our
+dataframe, where they don't make any sense
+Let's check whether that's true:
+```{r}
+names(which(colSums(is.na(data)) > 0))
+```
+
+It is!
+
+After we've dealt with all of the NAs, let's check whether everything is the 
+correct type:
+```{r}
+str(data)
+```
+
+Nothing seems out of order, but we still have a bunch of character vectors.
+We need to encode them in a way, that our models can use. Let's convert them to
+factors. This way R can automatically dummy code them when building models.
+
+First things first, we have to find out which parameters are strings, so we can
+know which ones to convert to factors:
+```{r}
+char_parms <- colnames(data[sapply(data, is.character)])
+char_parms
+```
+
+As we can see, we have a bit more than 40 parameters which are characters.
+Let's convert them to factors:
+```{r}
+data[char_parms] <- lapply(data[char_parms], factor)
+```
+
+Let's check whether we were successful:
+```{r}
+str(data)
+```
+
+We were!  
+  
+Now, after cleaning the data, let's check out the correlations, to see, which
+parameters should we pay more attention to.  
+First let's see for the numeric values:
+```{r}
+num_parms <- colnames(data[sapply(data, is.numeric)])
+num_parms
+
+numcors <- cor(data[,num_parms], use = "complete.obs")
+corrplot(numcors, type = "lower")
+```
+This is hard to read, but we can already see that we don't need all of these 
+parameters.  
+Let's check out the more relevant ones:
+```{r}
+relevant_names <- names(numcors[38,numcors[38,] > 0.5])
+
+relcors <- cor(data[,relevant_names], use = "complete.obs")
+corrplot(relcors, type = "lower")
+```
+Let's check them out:
+```{r}
+scatterplot(data$OverallQual, data$SalePrice, regLine = list(col="green"), smooth=list(col.smooth="red", col.spread="black"))
+
+scatterplot(data$GrLivArea, data$SalePrice, xlim = c(250, 3000), ylim = c(0, 500000), regLine = list(col="green"), smooth=list(col.smooth="red", col.spread="black"))
+
+scatterplot(data$GrLivArea, data$TotRmsAbvGrd, regLine = list(col="green"), smooth=list(col.smooth="red", col.spread="black"))
+
+scatterplot(data$OverallQual, data$GrLivArea, regLine = list(col="green"), smooth=list(col.smooth="red", col.spread="black"))
+
+pairs(data[,c("SalePrice", "GrLivArea", "TotRmsAbvGrd")])
+```
+
+We can see a couple of obvious correlations, that don't mean anything, such as:
+between the GarageArea and GarageCars, and GrLivArea and TotRmsAbvGrd.
+  
+Let's calculate a new parameter, the price per square feet:
+```{r}
+data$ppsqf <- data$SalePrice / data$GrLivArea
+scatterplot(data$OverallQual, data$ppsqf, regLine = list(col="green"), smooth=list(col.smooth="red", col.spread="black"))
+```
+Let's check out the correlation between this new parameters and the old ones:
+```{r}
+relevant_names2 <- c(relevant_names, "ppsqf")
+relevant_names2
+
+relcors2 <- cor(data[,relevant_names2], use = "complete.obs")
+corrplot(relcors2, type = "lower")
+```
+It seems as the price per square feet has risen over the years. Let's find it out:
+```{r}
+scatterplot(data$YearBuilt, data$ppsqf, regLine = list(col="green"), smooth=list(col.smooth="red", col.spread="black"))
+```
+We were right.
+
+
+## Model Building:
+
+Let's build some models. I would like to use the caret package to build a linear
+and an exponential regression model.  
+Let's create the data partitions first:
+```{r}
+library(caret)
+
+target <- data$SalePrice
+trainIdx <- createDataPartition(target, p = .75)
+traindata <- data[trainIdx$Resample1,]
+testdata <- data[-trainIdx$Resample1,]
+```
+
+```{r}
+str(traindata)
+```
+
+After creating the partitions, let's build the model.  
+First let's just use one parameter:
+```{r}
+model <- lm(SalePrice~OverallQual, data = traindata)
+summary(model)
+```
+
+
+
+```{r}
+plot(model)
+shapiro.test(model$residuals)
+confint(model)
+cor(traindata$SalePrice, model$fitted.values)
+model
+```
+```{r}
+prediction <- predict(model, testdata, type="response")
+model_output <- cbind(testdata, prediction)
+
+model_output$log_prediction <- log(model_output$prediction)
+model_output$log_SalePrice <- log(model_output$SalePrice)
+
+rmse <- function(fittedvals, truevals){
+  sqrt(mean((fittedvals - truevals)^2))
+}
+
+rmse(model_output$log_SalePrice,model_output$log_prediction)
+```
+As we can see, our model isn't any good. Let's try a different approach, with 
+more parameters:
+```{r}
+model2 <- lm(SalePrice~OverallQual+GrLivArea, data = traindata)
+summary(model2)
+```
+Let's evaluate it:
+```{r}
+plot(model2)
+shapiro.test(model2$residuals)
+confint(model2)
+cor(traindata$SalePrice, model2$fitted.values)
+model2
+```
+```{r}
+prediction2 <- predict(model2, testdata, type="response")
+model2_output <- cbind(testdata, prediction2)
+
+model2_output$log_prediction <- log(model2_output$prediction)
+model2_output$log_SalePrice <- log(model2_output$SalePrice)
+
+rmse(model2_output$log_SalePrice, model2_output$log_prediction)
+```
+
+This somehow actually worsened our model, I'm not exactly sure why.
+Anyway, let's try to give it more parameters:
+
+```{r}
+model3 <- lm(SalePrice~OverallQual+YearBuilt+YearRemodAdd+TotalBsmtSF+X1stFlrSF+
+               GrLivArea+FullBath+TotRmsAbvGrd+GarageCars+GarageArea+ppsqf, data = traindata)
+summary(model3)
+```
+Linear regression models are clearly not the way to go. Let's try some exponential
+ones.
+```{r}
+model4 <- lm(log(SalePrice) ~ OverallQual, data = traindata)
+summary(model4)
+```
+
+```{r}
+plot(model4)
+shapiro.test(model4$residuals)
+confint(model4)
+cor(traindata$SalePrice, model4$fitted.values)
+model4
+```
+As we can see, this model is fairly better than our previous attempts.
+Let's try the same thing, with more parameters.
+
+```{r}
+model5 <- lm(log(SalePrice)~OverallQual+YearBuilt+YearRemodAdd+TotalBsmtSF+X1stFlrSF+
+               GrLivArea+FullBath+TotRmsAbvGrd+GarageCars+GarageArea+ppsqf, data = traindata)
+summary(model5)
+```
+
+```{r}
+plot(model5)
+shapiro.test(model5$residuals)
+confint(model5)
+cor(traindata$SalePrice, model5$fitted.values)
+model5
+```
+
+As we can see, our model did not improve, on the opposite, it worsened.
+
+I would love to continue working on this exercise, improving my models, examining
+the target parameter in relation to groups of objects, such as city areas, or 
+types of buildings, but sadly I'm out of time.
+
+As a last thing, I tried to check out the whether the prices and the sizes of 
+living areas are affected by the neighborhood. We can only see some correlation
+in the outliers.
+
+```{r}
+plot(data$GrLivArea, data$SalePrice, col=data$Neighborhood)
+```
+
+As a conclusion, I still have a lot to learn and would require a lot more time to
+properly solve the problem. My current best model only uses a single parameter.
+If I have the time for it in the future, I'll return to try to solve it properly.
+
+
+
